@@ -26,21 +26,21 @@ class Trainer:
         train_dataset,
         eval_dataset,
         evaluate_during_training: bool,
-        train_batch_size,
-        eval_batch_size,
-        gradient_accumulation_steps,
-        learning_rate,
-        num_train_epochs,
-        weight_decay,
-        lr_scheduler_type,
-        max_gradient_norm,
-        logging_steps,
-        evaluate_steps,
-        output_dir,
-        num_workers,
-        fp16,
-        device,
-        seed,
+        train_batch_size: int,
+        eval_batch_size: int,
+        gradient_accumulation_steps: int,
+        learning_rate: float,
+        num_train_epochs: int,
+        weight_decay: float,
+        lr_scheduler_type: str,
+        max_gradient_norm: float,
+        logging_steps: int,
+        evaluate_steps: int,
+        output_dir: str,
+        num_workers: int,
+        fp16: bool,
+        device: torch.device,
+        seed: int,
     ):
         self.model = model
         self.model.to(device)
@@ -64,6 +64,8 @@ class Trainer:
         self.evaluate_steps = evaluate_steps
 
         self.fp16 = fp16
+        if self.fp16:
+            raise NotImplementedError
         if self.fp16 is not None:
             self.scaler = torch.cuda.amp.GradScaler()
 
@@ -152,14 +154,15 @@ class Trainer:
 
     def prepare_inputs(
         self,
-        inputs: Dict[str, Union[torch.Tensor, Any]],
+        inputs,
     ) -> Dict[str, Union[torch.Tensor, Any]]:
 
-        for k, v in inputs.items():
-            if isinstance(v, torch.Tensor):
-                inputs[k] = v.to(self.device)
+        inputs_prepared = {}
 
-        return inputs
+        inputs_prepared["inputs"] = inputs[0].to(self.device)
+        inputs_prepared["labels"] = inputs[1].to(self.device)
+
+        return inputs_prepared
 
     def compute_loss(self, model, inputs):
 
@@ -219,39 +222,68 @@ class Trainer:
     ):
         num_examples = len(dataloader.dataset)
         # TODO de-hard-code
-        all_logits = np.zeros(num_examples, 2, model.x_size)
+        all_preds = np.zeros(num_examples, 2, model.x_size)
+
+        if has_labels:
+            all_labels = np.zeros(num_examples, 2)
 
         model.eval()
         i = 0
         for inputs in dataloader:
 
             with torch.no_grad():
-                inputs = self.prepare_inputs(inputs)
-                outputs = model(**inputs)
+                inputs_prepared = self.prepare_inputs(inputs)
+                outputs = model(**inputs_prepared)
 
             if has_labels:
-                # loss is first element in the outputs
+                # loss is the first element in the outputs,
+                # so we take second element-- logits
                 logits = outputs[1]
             else:
                 logits = outputs[0]
 
             batch_size = logits.shape[0]
-            all_logits[i : batch_size + i] = logits.cpu().numpy()
+            all_preds[i : batch_size + i] = logits.cpu().numpy().argmax(-1)
+
+            if has_labels:
+                all_labels[i : batch_size + i] = inputs_prepared["labels"].cpu().numpy()
 
             i += batch_size
 
-        return all_logits
+        if has_labels:
+            return all_preds, all_labels
+        else:
+            return all_preds
 
     def compute_metrics(
         self,
+        preds,
+        labels,
     ):
-        pass
+        metrics = {}
+
+        acc = np.prod(preds == labels, -1) / preds.shape[0]
+        acc_x = (preds[:, 0] == labels[:, 0]).sum() / preds.shape[0]
+        acc_y = (preds[:, 1] == labels[:, 1]).sum() / preds.shape[0]
+
+        metrics["acc"] = acc
+        metrics["acc_x"] = acc_x
+        metrics["acc_y"] = acc_y
+
+        return metrics
 
     def evaluate(
         self,
         eval_dataloader,
     ):
-        pass
+        eval_preds, eval_labels = self.prediction_loop(
+            dataloader=eval_dataloader, model=self.model, has_labels=True
+        )
+
+        metrics = self.compute_metrics(preds=eval_preds, labels=eval_labels)
+
+        logging.info("Eval metrics: ")
+        logging.info(metrics)
 
     def save_model(
         self,
@@ -265,7 +297,7 @@ class Trainer:
         # DATALOADERS:
         train_dataloader = self.get_dataloader(self.train_dataset, "train")
 
-        if self.evaluate_during_training is not None:
+        if self.evaluate_during_training:
             eval_dataloader = self.get_dataloader(self.train_dataset, "eval")
 
         #
@@ -335,9 +367,11 @@ class Trainer:
                     if global_step % self.logging_steps == 0:
                         self.log(global_step, log_epoch, tr_loss)
 
-                    if global_step % self.evaluate_steps == 0:
-                        self.evaluate()
-                        self.model.train()
+                    if (
+                        global_step % self.evaluate_steps == 0
+                        and self.evaluate_during_training
+                    ):
+                        self.evaluate(eval_dataloader)
 
     def freeze_parameters(
         self,

@@ -77,6 +77,9 @@ class QuakeDataset(Dataset):
 
         self.normalize_data()
 
+        self.X = self.df[["latitude_norm", "longitude_norm", "mag_norm"]].to_numpy()
+        self.y = self.df[["grid_x", "grid_y", "mag"]].to_numpy()
+
     def normalize_data(
         self,
     ):
@@ -92,15 +95,14 @@ class QuakeDataset(Dataset):
         return len(self.df) - self.num_points - self.biggest_q_in + 1
 
     def __getitem__(self, idx):
-        X = self.df[idx : idx + self.num_points][
-            ["latitude_norm", "longitude_norm", "mag_norm"]
-        ].to_numpy()
+        X = self.X[idx : idx + self.num_points]
 
-        y_data = self.df[
+        y_data = self.y[
             idx + self.num_points : idx + self.num_points + self.biggest_q_in
-        ][["grid_x", "grid_y", "mag"]]
-        y_max_mag_idx = y_data["mag"].idxmax()
+        ]
 
-        y = y_data[["grid_x", "grid_y"]].loc[y_max_mag_idx]
+        y_max_mag_idx = y_data[:, -1].argmax()
+
+        y = y_data[:, :2][y_max_mag_idx]
 
         return torch.tensor(X).squeeze(), torch.tensor(y)
