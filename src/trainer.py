@@ -10,6 +10,7 @@ import torch.nn as nn
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.sampler import SequentialSampler, RandomSampler
 import numpy as np
+from tqdm import trange, tqdm
 
 from transformers import AdamW
 
@@ -22,7 +23,6 @@ class Trainer:
     def __init__(
         self,
         model,
-        tokenizer,
         train_dataset,
         eval_dataset,
         evaluate_during_training: bool,
@@ -45,8 +45,6 @@ class Trainer:
         self.model = model
         self.model.to(device)
 
-        self.tokenizer = tokenizer
-
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.evaluate_during_training = evaluate_during_training
@@ -66,7 +64,7 @@ class Trainer:
         self.fp16 = fp16
         if self.fp16:
             raise NotImplementedError
-        if self.fp16 is not None:
+        if self.fp16:
             self.scaler = torch.cuda.amp.GradScaler()
 
         self.device = device
@@ -143,7 +141,7 @@ class Trainer:
         self,
         optimizer,
         num_training_steps,
-        warmup_steps=None,
+        warmup_steps=0,
     ):
         return get_scheduler(
             self.lr_scheduler_type,
@@ -212,8 +210,6 @@ class Trainer:
 
         logging.info(logs)
 
-        return logs
-
     def prediction_loop(
         self,
         dataloader,
@@ -222,7 +218,7 @@ class Trainer:
     ):
         num_examples = len(dataloader.dataset)
         # TODO de-hard-code
-        all_preds = np.zeros(num_examples, 2, model.x_size)
+        all_preds = np.zeros(num_examples, 2)
 
         if has_labels:
             all_labels = np.zeros(num_examples, 2)
@@ -336,9 +332,20 @@ class Trainer:
 
         self.model.zero_grad()
 
-        for epoch in range(epochs_trained, self.num_train_epochs):
+        train_iterator = trange(
+            epochs_trained,
+            self.num_train_epochs,
+            desc="Epoch",
+        )
 
-            for step, inputs in enumerate(train_dataloader):
+        for epoch in train_iterator:
+
+            epoch_iterator = tqdm(
+                train_dataloader,
+                desc="Iteration",
+            )
+
+            for step, inputs in enumerate(epoch_iterator):
 
                 tr_loss += self.training_step(self.model, inputs)
 
@@ -363,6 +370,10 @@ class Trainer:
 
                     global_step += 1
                     log_epoch = epoch + (step + 1) / len(train_dataloader)
+
+                    epoch_iterator.set_description(
+                        "Avg loss: {:.9f}".format(tr_loss / global_step)
+                    )
 
                     if global_step % self.logging_steps == 0:
                         self.log(global_step, log_epoch, tr_loss)

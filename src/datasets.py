@@ -105,4 +105,4 @@ class QuakeDataset(Dataset):
 
         y = y_data[:, :2][y_max_mag_idx]
 
-        return torch.tensor(X).squeeze(), torch.tensor(y)
+        return torch.tensor(X).squeeze().float().permute(1, 0), torch.tensor(y).long()

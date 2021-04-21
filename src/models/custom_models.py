@@ -9,7 +9,7 @@ from transformers.models.bert.modeling_bert import (
     BertPooler,
 )
 
-from custom_configuration import QuakeNetConfig
+from .custom_configuration import QuakeNetConfig
 
 
 def conv_block(in_ch, out_ch, kernel_size, *args, **kwargs):
@@ -114,21 +114,17 @@ class SimplePointNetEncoder(nn.Module):
         for point_feature_block in self.point_feature_blocks:
             # potentially save point features
             x = point_feature_block(x)
-            print("point feature:", x.shape)
 
         # TODO needs maxpool for order invariance! ?
         # is invariance something I really need? quake dataset will be order in time anyway
         # TODO after dense layers!
 
         x = self.maxpool(x)
-        print("after maxpool", x.shape)
         x = self.linear(x)
-        print("after linear expand", x.shape)
         # x = x.permute(0, 2, 1)
 
         for point_reduction_block in self.point_reduction_blocks:
             x = point_reduction_block(x)
-            print("point reduction", x.shape)
 
         return x.permute(0, 2, 1)
 
